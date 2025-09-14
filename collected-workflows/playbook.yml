@@ -1,0 +1,26 @@
+#!/usr/local/opt/python/bin/python2.7
+---
+- name: Install the software package in clound VMS
+  hosts: all
+  become: yes
+  become_user: root
+
+  tasks:
+  # - name: install couchbase
+  #   pip: name=couchbase executable=pip3
+  - name: Update the cache
+    apt: update_cache=yes
+  - name: Install apache2
+    apt: pkg=apache2 state=latest
+  - name: Install curl
+    apt: pkg=curl state=latest
+  - name: Install pip3
+    apt: pkg=python3-pip state=latest
+  - name: Install tweepy
+    pip: name=tweepy executable=pip3
+  - name: Install couchdb
+    pip: name=couchdb executable=pip3
+  - name: Install nltk
+    pip: name=nltk executable=pip3
+  - name: Install textblob
+    pip: name=textblob executable=pip3

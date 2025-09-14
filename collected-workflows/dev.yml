@@ -1,0 +1,143 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:14.5
+    container_name: cosmos_notifier_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=cosmos-notifier-db
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db-migration:
+    build: go
+    container_name: cosmos_notifier_db_migration
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier db migrate"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nodejs:
+    build: nodejs
+    container_name: cosmos_notifier_nodejs
+    working_dir: /usr/src/app
+    volumes:
+      - /usr/app/node_modules
+    command: npm run start
+#    ports:
+#      - "8081:8081"
+    healthcheck:
+      test: curl --fail http://localhost:8081 || exit 1
+      interval: 10s
+      retries: 3
+      timeout: 10s
+
+  telegram:
+    build: go
+    container_name: cosmos_notifier_telegram
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier service telegram"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+
+  grpc:
+    build: go
+    container_name: cosmos_notifier_grpc
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier service grpc"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+
+  contract-crawler:
+    build: go
+    container_name: cosmos_notifier_contract_crawler
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier service contract-crawler --repeat"
+    depends_on:
+      nodejs:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+
+  chain-crawler:
+    build: go
+    container_name: cosmos_notifier_chain_crawler
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier service chain-crawler --repeat"
+    depends_on:
+      nodejs:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+
+  validator-crawler:
+    build: go
+    container_name: cosmos_notifier_validator_crawler
+    working_dir: /app
+    env_file:
+      - .env
+    command: "/cosmos-notifier service validator-crawler --repeat"
+    depends_on:
+      nodejs:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      db-migration:
+        condition: service_completed_successfully
+
+  envoy:
+    image: envoyproxy/envoy-dev
+    container_name: cosmos_notifier_envoy
+    extra_hosts:
+      - "grpc:host-gateway"
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml
+
+  webapp:
+    env_file:
+      - .env
+    build:
+      context: webapp
+      dockerfile: flutter.Dockerfile
+      args:
+        CONFIG_FILE: ${FLUTTER_CONFIG_FILE}
+    container_name: cosmos_notifier_webapp
+    ports:
+      - "80:80"
+
+volumes:
+  data:
+    name: cosmos_notifier_data
+  pgadmin:

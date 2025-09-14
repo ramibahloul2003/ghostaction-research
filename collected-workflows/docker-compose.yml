@@ -1,0 +1,250 @@
+services:
+  redis:
+    hostname: redis
+    container_name: redis
+    image: redis:7-alpine
+    command: redis-server
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+    networks:
+      - laudspeaker_default
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    hostname: postgres
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: laudspeaker
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - laudspeaker_default
+
+  pgbouncer:
+    image: bitnami/pgbouncer:1.23.1
+    container_name: pgbouncer
+    hostname: pgbouncer
+    environment:
+      - PGBOUNCER_PORT=6432
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_USERNAME=${POSTGRES_USER:-postgres}
+      - POSTGRESQL_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - PGBOUNCER_DATABASE=laudspeaker
+      - PGBOUNCER_AUTH_USER=${POSTGRES_USER:-postgres}
+      - PGBOUNCER_AUTH_TYPE=scram-sha-256
+      - PGBOUNCER_POOL_MODE=transaction
+      - PGBOUNCER_MAX_DB_CONNECTIONS=100
+      - PGBOUNCER_MAX_CLIENT_CONN=1000
+      - PGBOUNCER_MIN_POOL_SIZE=5
+      - PGBOUNCER_DEFAULT_POOL_SIZE=100
+      - PGBOUNCER_RESERVE_POOL_SIZE=0
+      - PGBOUNCER_IGNORE_STARTUP_PARAMETERS=lock_timeout,statement_timeout,idle_in_transaction_session_timeout
+    ports:
+      - "6432:6432"
+    depends_on:
+      - postgres
+    networks:
+      - laudspeaker_default
+
+  # Ensure the following settings are set
+  # date_time_input_format: 'best_effort'
+  # output_format_json_array_of_rows: 1
+  clickhouse:
+    hostname: clickhouse
+    container_name: clickhouse
+    image: clickhouse/clickhouse-server:24.9
+    restart: on-failure
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 2s
+      retries: 20
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    networks:
+      - laudspeaker_default
+    configs:
+      - source: clickhouse_rmq_config
+        target: /etc/clickhouse-server/config.d/rmq.xml
+
+  init-environment:
+    build:
+      context: ./local-env/
+      dockerfile: Dockerfile.initenv
+    container_name: init-environment
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    networks:
+      - laudspeaker_default
+    command:
+      - "environment"
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    command:
+      - rabbitmq-server
+    ports:
+      - "5672:5672"
+      - "1883:1883"
+      - "15672:15672"
+    container_name: rabbitmq
+    networks:
+      - laudspeaker_default
+
+  s3:
+    image: quay.io/minio/minio
+    command: "server /data --console-address :9123"
+    ports:
+      - "9123:9123"
+      - "9001:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      MINIO_ROOT_USER: test
+      MINIO_ROOT_PASSWORD: 12345678
+    container_name: s3
+    networks:
+      - laudspeaker_default
+
+  laudspeaker-web:
+    profiles:
+      - "testing"
+    image: ${LAUDSPEAKER_IMAGE:-laudspeaker/laudspeaker:latest}
+    container_name: laudspeaker-web
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "localhost:8080"]
+      interval: 5s
+      timeout: 30s
+      retries: 20
+      start_period: 60s
+    depends_on:
+      init-environment:
+        condition: service_completed_successfully
+      s3-createbuckets:
+        condition: service_completed_successfully
+    env_file:
+      - ./local-env/env-docker-compose
+    networks:
+      - laudspeaker_default
+
+  laudspeaker-queue:
+    profiles:
+      - "testing"
+    image: ${LAUDSPEAKER_IMAGE:-laudspeaker/laudspeaker:latest}
+    container_name: laudspeaker-queue
+    command: "queue"
+    healthcheck:
+      test: '[ $(find /tmp/laudspeaker-healthcheck-queue -mmin -1 | wc -l) -eq 1 ] || false'
+      interval: 10s
+      timeout: 30s
+      retries: 10
+    depends_on:
+      laudspeaker-web:
+        condition: service_healthy
+    env_file:
+      - ./local-env/env-docker-compose
+    networks:
+      - laudspeaker_default
+
+  laudspeaker-cron:
+    profiles:
+      - "testing"
+    image: ${LAUDSPEAKER_IMAGE:-laudspeaker/laudspeaker:latest}
+    container_name: laudspeaker-cron
+    command: "cron"
+    healthcheck:
+      test: '[ $(find /tmp/laudspeaker-healthcheck-cron -mmin -1 | wc -l) -eq 1 ] || false'
+      interval: 10s
+      timeout: 30s
+      retries: 10
+    depends_on:
+      laudspeaker-web:
+        condition: service_healthy
+    env_file:
+      - ./local-env/env-docker-compose
+    networks:
+      - laudspeaker_default
+
+  s3-createbuckets:
+    image: minio/mc
+    depends_on:
+      s3:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add s3 http://s3:9000 test 12345678;
+      /usr/bin/mc mb s3/$$AWS_S3_CUSTOMERS_IMPORT_BUCKET;
+      /usr/bin/mc mb s3/$$AWS_S3_BUCKET;
+      exit 0;
+      "
+    env_file:
+      - ./local-env/env-docker-compose
+    networks:
+      - laudspeaker_default
+  redis-gui:
+    container_name: redis-gui
+    image: redis/redisinsight:latest
+    profiles:
+      - gui
+    ports:
+      - 8091:5540
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://127.0.0.1:5540/api/health/ || exit 1
+    networks:
+      - laudspeaker_default
+
+  init-guis:
+    profiles:
+      - gui
+    build:
+      context: ./local-env/
+      dockerfile: Dockerfile.initenv
+    container_name: init-gui
+    depends_on:
+      redis-gui:
+        condition: service_healthy
+    networks:
+      - laudspeaker_default
+    command:
+      - "guis"
+
+configs:
+  clickhouse_rmq_config:
+    content: |
+      <clickhouse>
+        <rabbitmq>
+           <username>guest</username>
+           <password>guest</password>
+        </rabbitmq>
+      </clickhouse>
+
+networks:
+  laudspeaker_default:
+    driver: bridge
+    name: laudspeaker_default

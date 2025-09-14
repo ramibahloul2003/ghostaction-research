@@ -1,0 +1,54 @@
+version: "1"
+services:
+  - name: sample-app:0.32.0
+    description: A sample expressjs service
+    run: node /ops/index.js
+    port: [ '8080:8080' ]
+    domain: ""
+    env:
+      static:
+        - PORT=8080
+    # events:
+      # - "github:kc-dot-io/sample-app:pull_request.merged"
+      # - "github:kc-dot-io/sample-app:pull_request.opened"
+    # trigger:
+     # - build
+     # - publish
+     # - start
+pipelines:
+  - name: sample-app-pipeline:0.1.2
+    description: build a release for deployment
+    env:
+      static:
+        - DEBIAN_FRONTEND=noninteractive
+        - ORG=kc-dot-io
+        - REPO=sample-app
+        - AWS_REGION=us-west-1
+        - STACK_TYPE=aws-eks-ec2-asg-cdk
+      secrets:
+        - GITHUB_TOKEN
+        - AWS_ACCESS_KEY_ID
+        - AWS_SECRET_ACCESS_KEY
+        - AWS_ACCOUNT_NUMBER
+    events:
+      - "github:kc-dot-io/sample-app:pull_request.merged"
+      - "github:kc-dot-io/sample-app:pull_request.opened"
+      - "github:kc-dot-io/sample-app:pull_request.synchronize"
+    jobs:
+      - name: sample-app-build-job
+        description: sample-app build step
+        packages:
+          - git
+          - unzip
+          - python
+        steps:
+          - curl https://s3.amazonaws.com/aws-cli/awscli-bundle-1.18.200.zip -o awscli-bundle.zip
+          - unzip awscli-bundle.zip && ./awscli-bundle/install -b ~/bin/aws
+          - export PATH=~/bin:$PATH
+          - aws --version
+          - git clone https://$GITHUB_TOKEN:x-oauth-basic@github.com/$ORG/$REPO
+          - cd $REPO && ls -asl
+          - git fetch && git checkout $REF
+          - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_NUMBER.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO
+          - docker build -f Dockerfile -t $AWS_ACCOUNT_NUMBER.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO-$STACK_TYPE:$REF .
+          - docker push $AWS_ACCOUNT_NUMBER.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO-$STACK_TYPE:$REF

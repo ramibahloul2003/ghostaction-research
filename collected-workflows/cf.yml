@@ -1,0 +1,451 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Factorio Spot Price Server via Docker / ECS
+Parameters:
+
+  ECSAMI:
+    Description: AWS ECS AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
+
+  FactorioImageTag:
+    Type: String
+    Description: "(Examples include latest, stable, 0.17, 0.17.33) Refer to tag descriptions available here: https://hub.docker.com/r/factoriotools/factorio/)"
+    Default: stable
+
+  ServerState:
+    Type: String
+    Description: "Running: A spot instance will launch shortly after setting this parameter; your Factorio server should start within 5-10 minutes of changing this parameter (once UPDATE_IN_PROGRESS becomes UPDATE_COMPLETE). Stopped: Your spot instance (and thus Factorio container) will be terminated shortly after setting this parameter."
+    Default: Running
+    AllowedValues:
+    - Running
+    - Stopped
+
+  InstancePurchaseMode:
+    Type: String
+    Description: "Spot: Much cheaper, but your instance might restart during gameplay with a few minutes of unsaved gameplay lost. On Demand: Instance will be created in on-demand mode. More expensive, but your gameplay is unlikely to be interrupted by the server going down."
+    Default: "Spot"
+    AllowedValues:
+    - "On Demand"
+    - "Spot"
+
+  InstanceType:
+    Type: String
+    Description: "Spot: You should leave this blank to get the best value instance. Override at your discretion: https://aws.amazon.com/ec2/instance-types/. On Demand: You must specify this. "
+    Default: ""
+
+  SpotPrice:
+    Type: String
+    Description: "Spot: the max cents/hr to pay for spot instance. On Demand: Ignored"
+    Default: "0.05"
+
+  SpotMinMemoryMiB:
+    Type: Number
+    Description: "Spot: the minimum desired memory for your instance. On Demand: Ignored"
+    Default: 2048
+
+  SpotMinVCpuCount:
+    Type: Number
+    Description: "Spot: the minimum desired VCPUs for your instance. On Demand: Ignored"
+    Default: 2
+
+  KeyPairName:
+    Type: String
+    Description: (Optional - An empty value disables this feature)
+    Default: ''
+
+  YourIp:
+    Type: String
+    Description: (Optional - An empty value disables this feature)
+    Default: ''
+
+  HostedZoneId:
+    Type: String
+    Description: (Optional - An empty value disables this feature) If you have a hosted zone in Route 53 and wish to set a DNS record whenever your Factorio instance starts, supply the hosted zone ID here.
+    Default: ''
+
+  RecordName:
+    Type: String
+    Description: (Optional - An empty value disables this feature) If you have a hosted zone in Route 53 and wish to set a DNS record whenever your Factorio instance starts, supply the name of the record here (e.g. factorio.mydomain.com).
+    Default: ''
+
+  EnableRcon:
+    Type: String
+    Description: Refer to https://hub.docker.com/r/factoriotools/factorio/ for further RCON configuration details. This parameter simply opens / closes the port on the security group.
+    Default: false
+    AllowedValues:
+    - true
+    - false
+
+  DlcSpaceAge:
+    Type: String
+    Description: Refer to https://hub.docker.com/r/factoriotools/factorio/ for further information about Space Age. Enables or disable Space Age mods. Everybody that wants to use these servers will have to have mods enabled or disabled respectively for the Space Age expansion pack. Irrelevant if docker image for factorio is set to be prior to v2.
+    Default: false
+    AllowedValues:
+    - true
+    - false
+
+  UpdateModsOnStart:
+    Type: String
+    Description: Refer to https://hub.docker.com/r/factoriotools/factorio/ for further configuration details.
+    Default: false
+    AllowedValues:
+    - true
+    - false
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Essential Configuration
+        Parameters:
+        - FactorioImageTag
+        - DlcSpaceAge
+        - ServerState
+        - EnableRcon
+        - UpdateModsOnStart
+      - Label:
+          default: Instance Configuration
+        Parameters:
+        - InstancePurchaseMode
+        - InstanceType
+        - SpotPrice
+        - SpotMinMemoryMiB
+        - SpotMinVCpuCount
+      - Label:
+          default: Remote Access (SSH) Configuration (Optional)
+        Parameters:
+        - KeyPairName
+        - YourIp
+      - Label:
+          default: DNS Configuration (Optional)
+        Parameters:
+        - HostedZoneId
+        - RecordName
+    ParameterLabels:
+      FactorioImageTag:
+        default: "Which version of Factorio do you want to launch?"
+      DlcSpaceAge:
+        default: "Do you want everybody that connects to be using the Spage Age Expansion or not?"
+      ServerState:
+        default: "Update this parameter to shut down / start up your Factorio server as required to save on cost. Takes a few minutes to take effect."
+      InstanceType:
+        default: "Which instance type? You must make sure this is available in your region! https://aws.amazon.com/ec2/pricing/on-demand/"
+      KeyPairName:
+        default: "If you wish to access the instance via SSH, select a Key Pair to use. https://console.aws.amazon.com/ec2/v2/home?#KeyPairs:sort=keyName"
+      YourIp:
+        default: "If you wish to access the instance via SSH, provide your public IP address."
+      HostedZoneId:
+        default: "If you have a hosted zone in Route 53 and wish to update a DNS record whenever your Factorio instance starts, supply the hosted zone ID here."
+      RecordName:
+        default: "If you have a hosted zone in Route 53 and wish to set a DNS record whenever your Factorio instance starts, supply a record name here (e.g. factorio.mydomain.com)."
+      EnableRcon:
+        default: "Do you wish to enable RCON?"
+      UpdateModsOnStart:
+        default: "Do you wish to update your mods on container start"
+Conditions:
+  KeyPairNameProvided: !Not [ !Equals [ !Ref KeyPairName, '' ] ]
+  IpAddressProvided: !Not [ !Equals [ !Ref YourIp, '' ] ]
+  DnsConfigEnabled: !And [ !Not [ !Equals [ !Ref HostedZoneId, '' ] ], !Not [ !Equals [ !Ref RecordName, '' ] ] ]
+  DoEnableRcon: !Equals [ !Ref EnableRcon, 'true' ]
+  UsingSpotInstance: !Equals [ !Ref InstancePurchaseMode, 'Spot' ]
+  InstanceTypeProvided: !Not [ !Equals [ !Ref InstanceType, '' ] ]
+
+Mappings:
+  ServerState:
+    Running:
+      DesiredCapacity: 1
+    Stopped:
+      DesiredCapacity: 0
+
+Resources:
+
+  # ====================================================
+  # BASIC VPC
+  # ====================================================
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.100.0.0/26
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+      - 0
+      - !GetAZs
+        Ref: 'AWS::Region'
+      CidrBlock: !Select [ 0, !Cidr [ 10.100.0.0/26, 4, 4 ] ]
+      VpcId: !Ref Vpc
+      MapPublicIpOnLaunch: true
+
+  SubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetA
+
+  SubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetB
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+      - 1
+      - !GetAZs
+        Ref: 'AWS::Region'
+      CidrBlock: !Select [ 1, !Cidr [ 10.100.0.0/26, 4, 4 ] ]
+      VpcId: !Ref Vpc
+      MapPublicIpOnLaunch: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+
+  # ====================================================
+  # EFS FOR PERSISTENT DATA
+  # ====================================================
+
+  Efs:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    Properties:
+      LifecyclePolicies:
+      - TransitionToIA: AFTER_7_DAYS
+      - TransitionToPrimaryStorageClass: AFTER_1_ACCESS
+
+  MountA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref Efs
+      SecurityGroups:
+      - !Ref EfsSg
+      SubnetId: !Ref SubnetA
+
+  MountB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref Efs
+      SecurityGroups:
+      - !Ref EfsSg
+      SubnetId: !Ref SubnetB
+
+  EfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-efs"
+      GroupDescription: !Sub "${AWS::StackName}-efs"
+      SecurityGroupIngress:
+      - FromPort: 2049
+        ToPort: 2049
+        IpProtocol: tcp
+        SourceSecurityGroupId: !Ref Ec2Sg
+      VpcId: !Ref Vpc
+
+  # ====================================================
+  # INSTANCE CONFIG
+  # ====================================================
+
+  Ec2Sg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-ec2"
+      GroupDescription: !Sub "${AWS::StackName}-ec2"
+      SecurityGroupIngress:
+      - !If
+        - IpAddressProvided
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: !Sub "${YourIp}/32"
+        - !Ref 'AWS::NoValue'
+      - FromPort: 34197
+        ToPort: 34197
+        IpProtocol: udp
+        CidrIp: 0.0.0.0/0
+      - !If
+        - DoEnableRcon
+        - FromPort: 27015
+          ToPort: 27015
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        - !Ref 'AWS::NoValue'
+      VpcId: !Ref Vpc
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        ImageId: !Ref ECSAMI
+        SecurityGroupIds:
+        - !Ref Ec2Sg
+        KeyName:
+          !If [ KeyPairNameProvided, !Ref KeyPairName, !Ref 'AWS::NoValue' ]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            echo ECS_CLUSTER=${EcsCluster} >> /etc/ecs/ecs.config
+            
+            # Only run DNS update if DNS is enabled
+            if [ "${HostedZoneId}" != "" ] && [ "${RecordName}" != "" ]; then
+              # Install AWS CLI
+              yum install -y aws-cli
+              # Get instance ID and public IP
+              PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+              
+              # Update Route53 DNS record
+              aws route53 change-resource-record-sets \
+                --hosted-zone-id ${HostedZoneId} \
+                --change-batch '{
+                  "Changes": [{
+                    "Action": "UPSERT",
+                    "ResourceRecordSet": {
+                      "Name": "${RecordName}",
+                      "Type": "A",
+                      "TTL": 60,
+                      "ResourceRecords": [{"Value":"'$PUBLIC_IP'"}]
+                    }
+                  }]
+                }' \
+                --region ${AWS::Region}
+            fi
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${AWS::StackName}-asg"
+      DesiredCapacity: !FindInMap [ ServerState, !Ref ServerState, DesiredCapacity ]
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandPercentageAboveBaseCapacity:
+            !If [ UsingSpotInstance, 0, 100 ]
+          SpotAllocationStrategy: lowest-price
+          SpotMaxPrice:
+            !If [ UsingSpotInstance, !Ref SpotPrice, !Ref AWS::NoValue ]
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref LaunchTemplate
+            Version: !GetAtt LaunchTemplate.LatestVersionNumber
+          Overrides:
+           - Fn::If:
+             - InstanceTypeProvided
+             - InstanceType: !Ref InstanceType
+             - InstanceRequirements:
+                 MemoryMiB:
+                   Min: !Ref SpotMinMemoryMiB
+                 VCpuCount:
+                   Min: !Ref SpotMinVCpuCount
+      MaxSize: !FindInMap [ ServerState, !Ref ServerState, DesiredCapacity ]
+      MinSize: !FindInMap [ ServerState, !Ref ServerState, DesiredCapacity ]
+      VPCZoneIdentifier:
+        - !Ref SubnetA
+        - !Ref SubnetB
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "route53:*"
+                Resource: "*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AWS::StackName}-cluster"
+
+  EcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref EcsCluster
+      DesiredCount: !FindInMap [ ServerState, !Ref ServerState, DesiredCapacity ]
+      ServiceName: !Sub "${AWS::StackName}-ecs-service"
+      TaskDefinition: !Ref EcsTask
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+
+  EcsTask:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+    - MountA
+    - MountB
+    Properties:
+      Volumes:
+      - Name: factorio
+        EFSVolumeConfiguration:
+          FilesystemId: !Ref Efs
+          TransitEncryption: ENABLED
+      ContainerDefinitions:
+        - Name: factorio
+          MemoryReservation: 1024
+          Image: !Sub "factoriotools/factorio:${FactorioImageTag}"
+          PortMappings:
+          - ContainerPort: 34197
+            HostPort: 34197
+            Protocol: udp
+          - ContainerPort: 27015
+            HostPort: 27015
+            Protocol: tcp
+          MountPoints:
+          - ContainerPath: /factorio
+            SourceVolume: factorio
+            ReadOnly: false
+          Environment:
+          - Name: UPDATE_MODS_ON_START
+            Value: !Sub "${UpdateModsOnStart}"
+          - Name: DLC_SPACE_AGE
+            Value: !Sub "${DlcSpaceAge}"
+
+Outputs:
+  CheckInstanceIp:
+    Description: To find your Factorio instance IP address, visit the following link. Click on the instance to find its Public IP address.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/ec2/v2/home?region=${AWS::Region}#Instances:tag:aws:autoscaling:groupName=${AutoScalingGroup};sort=tag:Name"

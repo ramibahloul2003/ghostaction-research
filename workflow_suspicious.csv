@@ -1,0 +1,8 @@
+file,workflow_name,triggers,jobs,secrets,num_jobs,num_secrets,suspicious
+.github_gitflow_linters.yml,Linters,[],"['rubocop', 'stylelint', 'nodechecker']",['env'],3,1,True
+.github_workflows_nightly_build.yml,Nightly Build,[],"['create-nightly-tag', 'frontend-tests', 'backend-unit-tests', 'release-nightly-build']",['env'],4,1,True
+.github_workflows_publish.yml,Publish,[],"['testRules', 'buildRuleSet', 'buildDockerRelease']",['env'],3,1,True
+.github_workflows_release_nightly.yml,Langflow Nightly Build,[],"['release-nightly-base', 'release-nightly-main', 'call_docker_build_base', 'call_docker_build_main', 'call_docker_build_main_ep']",['env'],5,1,True
+main.yml,Daily Checks for appcodeEcommerce121,[],"['daily-checks', 'dependency-check', 'code-complexity', 'php-insights']",['env'],4,1,True
+out_checkstyle_checkstyle_.github_workflows_diff_report.yml,DiffReport,[],"['parse_body', 'make_report', 'send_message']",['env'],3,1,True
+out_sass_sass_.github_workflows_ci.yml,CI,[],"['static_analysis', 'toc', 'link', 'js_api_mirroring', 'typedoc', 'heroku']",['env'],6,1,True

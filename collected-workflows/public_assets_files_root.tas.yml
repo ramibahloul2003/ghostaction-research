@@ -1,0 +1,54 @@
+---
+# supported frameworks: mocha|jest|jasmine
+framework: mocha
+
+blocklist:
+  # format: "<filename>##<suit-name>##<suit-name>##<test-name>"
+  - "src/test/api.js"
+  - "src/test/api1.js##this is a test-suite"
+  - "src/test/api2.js##this is a test-suite##this is a test-case"
+
+preRun:
+  # set of commands to run before running the tests like `yarn install`, `yarn build`
+  command:
+    # change the command according to the package manager being used in the repository.
+    # For eg, npm ci, yarn install or any other command used to fetch node modules
+    - npm install 
+
+postMerge:
+  # env vars provided at the time of discovering and executing the post-merge tests
+  env:
+    REPONAME: nexe
+    AWS_KEY: ${{ secrets.AWS_KEY }}
+  # glob-pattern for identifying the test files
+  pattern:
+    # regex pattern to discover tests to run in case of postMerge
+    - "./test/**/*.spec.ts"
+
+preMerge:
+  pattern:
+    # regex pattern to discover tests to run in case of premerge
+    - "./test/**/*.spec.ts"
+
+postRun:
+  # set of commands to run after running the tests
+  command:
+    - node --version
+
+# path to your custom configuration file required by framework
+configFile: mocharc.yml
+
+# provide the semantic version of nodejs required for your project
+nodeVersion: 14.17.2
+
+# configure whether to smartSelect test-cases. Default true
+smartRun: false
+
+# supported tiers: xsmall|small|medium|large|xlarge
+tier: small
+
+# number of parallel instances of containers to spawned to distribute test execution
+parallelism: 2
+
+# version of tas file intended to be used in order to issue warnings for deprecation or breaking changes
+version: 1.0

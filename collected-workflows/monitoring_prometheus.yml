@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# -----------------------------------------------------------------------------
+# Script Name : install_prometheus_docker.sh
+# Purpose     : Install Prometheus using Docker with persistent volume
+# Author      : Abdellah OMARI
+# -----------------------------------------------------------------------------
+
+echo "➡️  Updating system & installing Docker..."
+sudo apt update -y
+sudo apt install -y docker.io curl
+
+echo "✅ Docker installed. Enabling and starting Docker service..."
+sudo systemctl enable docker
+sudo systemctl start docker
+
+echo "👤 Adding current user to the docker group (effective after logout/login)..."
+sudo usermod -aG docker $USER
+
+echo "📦 Creating Docker volume for Prometheus..."
+sudo docker volume create prometheus_data
+
+echo "🛠️  Creating Prometheus config file..."
+mkdir -p ~/prometheus
+cat <<EOF > ~/prometheus/prometheus.yml
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+# 🔄 Remove existing Prometheus container if it exists
+if sudo docker ps -a --format '{{.Names}}' | grep -q "^prometheus$"; then
+  echo "🗑️  Removing existing Prometheus container..."
+  sudo docker rm -f prometheus
+fi
+
+echo "🐳 Running Prometheus container on port 9090..."
+sudo docker run -d \
+  --name prometheus \
+  --restart unless-stopped \
+  -p 9090:9090 \
+  -v prometheus_data:/prometheus \
+  -v ~/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus
+
+echo "⏳ Waiting for Prometheus to be reachable on port 9090..."
+for i in {1..30}; do
+  if curl -s -o /dev/null -w "%{http_code}" http://localhost:9090 | grep -q "200"; then
+    echo "✅ Prometheus is up!"
+    break
+  fi
+  echo "⌛ Still waiting ($i/30)…"
+  sleep 5
+done
+
+echo "🌐 Access Prometheus at: http://<your-EC2-public-IP>:9090"
+echo "🔒 Remember to open port 9090 in the AWS security group."
+echo "✅ Installation completed! Keeping the SSH session alive."
+echo "🛑 Press Ctrl+C to exit."
+
+# Garde la session SSH active après installation
+exec /bin/bash

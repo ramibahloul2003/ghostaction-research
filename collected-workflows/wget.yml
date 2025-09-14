@@ -1,0 +1,15 @@
+---
+name: wget
+description: Non-interactive network downloader that supports HTTP, HTTPS, FTP, and HTTP proxies
+os: Linux
+ptf_module: null
+---
+commands:
+  - "Download a File at a URL":
+    - type: ["bash","standalone"]
+    - text: "wget {WEBURL}{FILE}"
+    - input: ["target file directory URL with trailing slash","target filename"]
+    - output: ["STDOUT",{"FILE":{"input":2}}]
+    - note: "https://github.com/mikeiacovacci/axiom-data-demo-x"
+
+...

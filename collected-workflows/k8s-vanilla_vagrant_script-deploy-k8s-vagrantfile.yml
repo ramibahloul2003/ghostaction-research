@@ -1,0 +1,222 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/ubuntu2204"
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # === AJUSTES DE TU RED ===
+  VIP = "10.10.100.120"          # <-- IP libre en tu LAN (fuera del pool DHCP)
+  BRIDGE_SWITCH = "net-vms"      # <-- vSwitch externo en Hyper-V
+  POD_CIDR = "192.168.0.0/16"    # Calico
+
+  MASTERS = [
+    {name: "m1", mac: "00155D010011", cpus: 3, mem: 4096},
+    {name: "m2", mac: "00155D010012", cpus: 3, mem: 4096},
+    {name: "m3", mac: "00155D010013", cpus: 3, mem: 4096},
+  ]
+  WORKERS = [
+    {name: "w1", mac: "00155D010021", cpus: 2, mem: 3584},
+    {name: "w2", mac: "00155D010022", cpus: 2, mem: 3584},
+    {name: "w3", mac: "00155D010023", cpus: 2, mem: 3584},
+  ]
+
+  # ---------- PROVISION COMÚN ----------
+  COMMON = <<-SHELL
+    set -euxo pipefail
+    hostnamectl set-hostname $(cat /etc/hostname)
+    sed -ri '/\\sswap\\s/s/^#?/#/' /etc/fstab || true
+    swapoff -a || true
+
+    modprobe overlay
+    modprobe br_netfilter
+    cat >/etc/modules-load.d/k8s.conf <<EOF
+overlay
+br_netfilter
+EOF
+    cat >/etc/sysctl.d/99-kubernetes-cri.conf <<EOF
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+    sysctl --system
+
+    apt-get update
+    apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release jq software-properties-common
+    apt-get install -y containerd
+    mkdir -p /etc/containerd
+    containerd config default > /etc/containerd/config.toml
+    sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+    systemctl enable --now containerd
+
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    cat >/etc/apt/sources.list.d/kubernetes.list <<EOF
+deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+EOF
+
+    apt-get update
+    apt-get install -y kubelet kubeadm kubectl
+    apt-mark hold kubelet kubeadm kubectl
+    systemctl enable kubelet
+  SHELL
+
+  # ---------- kube-vip prep ----------
+  KUBEVIP_PREP = <<-SHELL
+    set -euxo pipefail
+    IFACE=$(ip route | awk '/default/ {print $5; exit}')
+    echo "IFACE=${IFACE}" > /root/kubevip.env
+    ctr --namespace k8s.io images pull ghcr.io/kube-vip/kube-vip:v0.8.0 || true
+    cat > /root/kube-vip-rbac.yaml <<'EOF'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-vip
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:kube-vip-role
+rules:
+- apiGroups: [""]
+  resources: ["services","services/status","endpoints","nodes","pods"]
+  verbs: ["list","get","watch","update","patch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["list","get","watch","update","create","patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:kube-vip-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:kube-vip-role
+subjects:
+- kind: ServiceAccount
+  name: kube-vip
+  namespace: kube-system
+EOF
+  SHELL
+
+  # ---------- MASTER 1 ----------
+  MASTER1 = <<-SHELL
+    set -euxo pipefail
+    IFACE=$(awk -F= '/IFACE=/{print $2}' /root/kubevip.env)
+    IPADDR=$(ip -o -4 addr show $IFACE | awk '{print $4}' | cut -d/ -f1)
+
+    cat > /etc/kubernetes/manifests/kube-vip.yaml <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-vip
+  namespace: kube-system
+spec:
+  hostNetwork: true
+  containers:
+  - name: kube-vip
+    image: ghcr.io/kube-vip/kube-vip:v0.8.0
+    args: ["manager"]
+    env:
+    - {name: vip_arp, value: "true"}
+    - {name: address, value: "#{VIP}"}
+    - {name: interface, value: "${IFACE}"}
+    - {name: cp_enable, value: "true"}
+    - {name: svc_enable, value: "false"}
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN","NET_RAW","SYS_TIME"]
+EOF
+
+    kubeadm init --control-plane-endpoint="#{VIP}:6443" \
+      --apiserver-advertise-address=${IPADDR} \
+      --pod-network-cidr=#{POD_CIDR} \
+      --cri-socket=unix:///run/containerd/containerd.sock
+
+    mkdir -p ~vagrant/.kube
+    cp /etc/kubernetes/admin.conf ~vagrant/.kube/config
+    chown -R vagrant:vagrant ~vagrant/.kube
+
+    su - vagrant -c "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml"
+    su - vagrant -c "kubectl apply -f /root/kube-vip-rbac.yaml"
+
+    kubeadm token create --ttl 0
+    CERT_KEY=$(kubeadm init phase upload-certs --upload-certs | tail -1 | tr -d '\\n')
+    JOIN_CMD=$(kubeadm token create --print-join-command)
+
+    echo "${JOIN_CMD} --cri-socket unix:///run/containerd/containerd.sock --control-plane --certificate-key ${CERT_KEY}" > /root/join-master.sh
+    echo "${JOIN_CMD} --cri-socket unix:///run/containerd/containerd.sock" > /root/join-worker.sh
+    chmod +x /root/join-master.sh /root/join-worker.sh
+  SHELL
+
+  MASTER_JOIN = <<-SHELL
+    set -euxo pipefail
+    apt-get install -y sshpass
+    IFACE=$(ip route | awk '/default/ {print $5; exit}')
+    cat > /etc/kubernetes/manifests/kube-vip.yaml <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: kube-vip, namespace: kube-system}
+spec:
+  hostNetwork: true
+  containers:
+  - name: kube-vip
+    image: ghcr.io/kube-vip/kube-vip:v0.8.0
+    args: ["manager"]
+    env:
+    - {name: vip_arp, value: "true"}
+    - {name: address, value: "#{VIP}"}
+    - {name: interface, value: "${IFACE}"}
+    - {name: cp_enable, value: "true"}
+    - {name: svc_enable, value: "false"}
+    securityContext:
+      capabilities: {add: ["NET_ADMIN","NET_RAW","SYS_TIME"]}
+EOF
+    for i in {1..30}; do
+      if sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@m1 'test -f /root/join-master.sh'; then break; fi
+      sleep 10
+    done
+    sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@m1 'sudo cat /root/join-master.sh' > /tmp/join.sh
+    bash /tmp/join.sh
+    mkdir -p ~vagrant/.kube
+    sshpass -p vagrant scp -o StrictHostKeyChecking=no vagrant@m1:/home/vagrant/.kube/config ~vagrant/.kube/config
+    chown -R vagrant:vagrant ~vagrant/.kube
+  SHELL
+
+  WORKER_JOIN = <<-SHELL
+    set -euxo pipefail
+    apt-get install -y sshpass
+    for i in {1..30}; do
+      if sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@m1 'test -f /root/join-worker.sh'; then break; fi
+      sleep 10
+    done
+    sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@m1 'sudo cat /root/join-worker.sh' > /tmp/join.sh
+    bash /tmp/join.sh
+  SHELL
+
+  # ---------- Definición de VMs ----------
+  (MASTERS + WORKERS).each do |n|
+    config.vm.define n[:name] do |node|
+      node.vm.hostname = n[:name}
+      node.vm.network "public_network",
+        bridge: BRIDGE_SWITCH,
+        auto_config: true,
+        hyperv__mac: n[:mac]
+
+      node.vm.provider :hyperv do |h|
+        h.cpus = n[:cpus}
+        h.memory = n[:mem}
+        h.vmname = n[:name}
+      end
+
+      node.vm.provision "shell", inline: COMMON
+      node.vm.provision "shell", inline: KUBEVIP_PREP
+    end
+  end
+
+  config.vm.provision "shell", inline: MASTER1, run: "always", privileged: true, name: "m1-init"
+  MASTERS[1..2].each { |m| config.vm.provision "shell", inline: MASTER_JOIN, run: "always", privileged: true, name: "join-#{m[:name]}" }
+  WORKERS.each { |w| config.vm.provision "shell", inline: WORKER_JOIN, run: "always", privileged: true, name: "join-#{w[:name]}" }
+end

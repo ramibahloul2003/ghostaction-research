@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Script to install Helm on a Linux VM
+
+# Update package index
+echo "Updating package index..."
+sudo apt update -y
+
+# Install required packages
+echo "Installing required packages (curl and apt-transport-https)..."
+sudo apt install -y curl apt-transport-https
+
+# Download and install Helm
+echo "Downloading and installing Helm..."
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Verify the installation
+echo "Verifying Helm installation..."
+helm version
+
+# Add Helm stable repository (optional)
+echo "Adding Helm stable repository..."
+helm repo add stable https://charts.helm.sh/stable
+
+# Update Helm repositories
+echo "Updating Helm repositories..."
+helm repo update
+
+echo "Helm installation completed successfully!"

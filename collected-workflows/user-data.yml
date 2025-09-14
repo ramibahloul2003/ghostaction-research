@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+
+### Define ENV variables
+# Opted to go this route vs using .env file to avoid
+# adding secrets to repository since they need to be
+# accessible during deployment.
+export ELASTIC_CLOUD_ID=""
+export ELASTIC_CLOUD_AUTH=""
+
+main() {
+  
+  apt-get update && \
+
+  sudo apt-get -y remove \
+  docker \
+  docker-engine \
+  docker.io \
+  containerd \
+  runc \
+  && \
+
+  sudo apt-get -y install \
+  apt-transport-https \
+  ca-certificates \
+  curl \
+  gnupg-agent \
+  software-properties-common \
+  && \
+
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo apt-key add - \
+  && \
+
+  sudo apt-key fingerprint 0EBFCD88 && \
+
+  sudo add-apt-repository \
+  "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) \
+  stable" \
+  && \
+
+  sudo apt-get -y install \
+  docker-ce \
+  docker-ce-cli \
+  containerd.io \
+  docker-compose \
+  jq \
+  git \
+  inotify-tools
+
+  sudo git clone https://github.com/lsemenenko/wordpress-honeypot-docker.git && \
+
+  cd docker-wordpress-honeypot && \
+
+  docker-compose -f wordpress.yml up -d && \
+
+  # Grab file changes with inotifywait
+  inotifywait -drq -o ${PWD}/watch.log -e 'create,close_write,delete,modify,moved_from,moved_to' --timefmt '%H:%M:%S[%Z]' --format '%T %w%f %e' ${PWD}/wordpress && \
+
+  # Grab network traffic with tcpdump
+  # TODO: Extract container name (based on directory name sans dashes)
+  docker run --net=container:dockerwordpresshoneypot_wordpress_1 -v $PWD:/data -d corfr/tcpdump -i any -w /data/dump.pcap && \
+
+  # Extract proxy network subnet and id
+  # TODO: Extract network and container name (based on directory name sans dashes)
+  PUB_NET=$(docker inspect dockerwordpresshoneypot_proxy | jq '.[0].Containers[] | select(.Name=="dockerwordpresshoneypot_wordpress_1") | .IPv4Address' --raw-output) && \
+  PUB_INT="br-$(docker network ls | grep dockerwordpresshoneypot_proxy | awk '{print $1}')" && \
+
+  # TODO: tighten up firewall rules
+  iptables -I DOCKER-USER -i ${PUB_INT} ! -d ${PUB_NET} -j DROP && \
+  iptables -I DOCKER-USER -i ${PUB_INT} -p tcp --sport 80 -j ACCEPT && \
+  iptables -I DOCKER-USER -i ${PUB_INT} -p udp --dport 53 -j ACCEPT && \
+  iptables -I DOCKER-USER -i ${PUB_INT} -d api.wordpress.org -j ACCEPT && \
+  iptables -I DOCKER-USER -i ${PUB_INT} -d downloads.wordpress.org -j ACCEPT && \
+  iptables -I DOCKER-USER -i ${PUB_INT} -d wordpress.org -j ACCEPT && \
+
+  # Install using admin and an easy password using generate_easy_pass()
+  # TODO: Enumerate exit code and loop, instead of sleeping
+  sleep 30 && \
+  docker run --rm --volumes-from dockerwordpresshoneypot_wordpress_1 --network container:dockerwordpresshoneypot_wordpress_1 wordpress:cli core install --url="$(curl -s checkip.amazonaws.com)" --title="Wordpress Site" --admin_user="admin" --admin_password="$(generate_easy_pass)" --admin_email="turtle$(tr -cd '[:digit:]' < /dev/urandom | fold -w7 | head -n1)@gmail.com" --skip-email
+}
+
+# Generate easy password using list from https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/darkweb2017-top10.txt
+generate_easy_pass() {
+  local EASY_PASS_LIST=($(curl -s https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/darkweb2017-top10.txt))
+  local size=${#EASY_PASS_LIST[@]}
+  local index=$(($RANDOM % $size))
+  echo "${EASY_PASS_LIST[$index]}"
+}
+
+main "$@"

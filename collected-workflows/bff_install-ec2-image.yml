@@ -1,0 +1,25 @@
+#!/bin/bash
+
+set -e
+
+APP_NAME="cn1g9-bff"
+APP_DIR="/home/ec2-user/$APP_NAME"
+
+echo "📦 Installing Docker and Docker Compose..."
+sudo yum update -y
+sudo yum install -y docker
+sudo service docker start
+sudo usermod -aG docker ec2-user
+newgrp docker
+
+DOCKER_COMPOSE_PATH="/usr/local/bin/docker-compose"
+sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o $DOCKER_COMPOSE_PATH
+sudo chmod +x $DOCKER_COMPOSE_PATH
+docker-compose --version
+
+curl https://raw.githubusercontent.com/rrooddooxx/cloud-native1_grupo9/refs/heads/main/bff/compose.ec2.yml >> docker-compose.yml
+
+  echo "📁 Preparing app directory: $APP_DIR"
+  mkdir -p $APP_DIR
+  cd $APP_DIR
+  echo "📁 Preparing app directory: $APP_DIR"

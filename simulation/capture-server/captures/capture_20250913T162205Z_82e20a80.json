@@ -1,0 +1,16 @@
+{
+  "received_at": "2025-09-13T16:22:05.686378Z",
+  "remote_addr": "127.0.0.1",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT; Windows NT 10.0; fr-FR) WindowsPowerShell/5.1.19041.6328",
+    "Content-Type": "application/json",
+    "Host": "127.0.0.1:5000",
+    "Content-Length": "93",
+    "Expect": "100-continue"
+  },
+  "body": "{\r\n    \"secret\":  \"dummy_LF_123\",\r\n    \"workflow\":  \"ci_simulated4_langflow-nightly-build\"\r\n}",
+  "json": {
+    "secret": "dummy_LF_123",
+    "workflow": "ci_simulated4_langflow-nightly-build"
+  }
+}

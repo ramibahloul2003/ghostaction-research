@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# command curl -sSL https://rvm.io/mpapis.asc | sudo gpg --import -
+# \curl -L https://get.rvm.io | bash -s stable --ruby
+# source /usr/local/rvm/scripts/rvm
+# gem install sass
+
+## I had to run this manually from the cli `source /usr/local/rvm/scripts/rvm`
+
+## consider adding --watch 
+
+# thanks to https://stackoverflow.com/questions/23493984/how-to-install-ruby-2-and-ruby-gems-on-ubuntu-box-with-ansible !!
+
+- name: Latest version of Ruby is installed
+  apt: pkg={{ item }} state=latest
+  with_items:
+    - ruby2.0
+    - ruby2.0-dev
+
+- name: Symlink exists for Ruby 2.0
+  file: src=/usr/bin/ruby2.0 dest=/usr/local/bin/ruby state=link
+
+- name: Symlink exists for Ruby Gems 2.0
+  file: src=/usr/bin/gem2.0 dest=/usr/local/bin/gem state=link
+
+- apt:
+    name: ruby-sass
+
+- name: run sass
+  raw:  nohup sass --watch /var/www/ldl/sites/all/themes/ldl/css/global.scss:/var/www/ldl/sites/all/themes/ldl/css/global.css  </dev/null >/dev/null 2>&1 & sleep 1

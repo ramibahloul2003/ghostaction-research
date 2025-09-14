@@ -1,0 +1,8 @@
+file_suspicious,file_norm,workflow_capture,workflow_norm,received_at,secret,match_type,details
+CI.yml,CI.yml,CI,CI,2025-09-13T16:03:12.847178Z,dummy_secret_value_123,Match,Secret captured: dummy_secret_value_123
+ci_simulated1_linters.yml,ci_simulated1_linters.yml,ci_simulated1_linters,ci_simulated1_linters,2025-09-13T16:22:04.673078Z,dummy_LIN_123,Match,
+ci_simulated3_publish.yml,ci_simulated3_publish.yml,ci_simulated3_publish,ci_simulated3_publish,2025-09-13T16:22:05.378514Z,dummy_PUB_123,Match,
+ci_simulated4_langflow-nightly-build.yml,ci_simulated4_langflow-nightly-build.yml,ci_simulated4_langflow-nightly-build,ci_simulated4_langflow-nightly-build,2025-09-13T16:22:05.686378Z,dummy_LF_123,Match,
+ci_simulated2_nightly-build.yml,ci_simulated2_nightly-build.yml,ci_simulated2_nightly-build,ci_simulated2_nightly-build,2025-09-13T16:22:05.065354Z,dummy_NB_123,Match,
+ci_simulated5_daily-checks-for-appcodeecommerce121.yml,ci_simulated5_daily-checks-for-appcodeecommerce121.yml,ci_simulated5_daily-checks-for-appcodeecommerce121,ci_simulated5_daily-checks-for-appcodeecommerce121,2025-09-13T16:22:05.999214Z,dummy_DC_123,Match,
+ci_simulated6_diffreport.yml,ci_simulated6_diffreport.yml,ci_simulated6_diffreport,ci_simulated6_diffreport,2025-09-13T16:22:06.315491Z,dummy_DR_123,Match,

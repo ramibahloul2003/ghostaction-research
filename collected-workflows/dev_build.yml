@@ -1,0 +1,75 @@
+#!/bin/bash
+set -e
+
+# Update and install required tools
+sudo apt update
+sudo apt install -y live-build wget curl rsync
+
+# Full clean-up of any previous build remnants
+echo "🧹 Cleaning previous build..."
+sudo lb clean --purge
+sudo rm -rf cache/ chroot/ config/bootstrap config/chroot config/source config/binary
+sudo rm -rf /tmp/d2ibuild/chroot /tmp/d2ibuild/cache
+
+# Configure live-build for Ubuntu 24.04 LTS (noble)
+echo "⚙️  Configuring live-build..."
+sudo lb config \
+  --distribution noble \
+  --architectures amd64 \
+  --linux-flavours amd64 \
+  --debian-installer live \
+  --archive-areas "main"
+
+# Create folders
+mkdir -p config/package-lists config/hooks config/includes.chroot/etc/xdg/xfce4/xfconf/xfce-perchannel-xml config/includes.chroot/etc/lightdm/lightdm.conf.d
+
+# XFCE desktop + tools
+cat <<EOF > config/package-lists/custom.list.chroot
+task-xfce-desktop
+firefox
+thunderbird
+curl
+wget
+git
+debian-archive-keyring
+EOF
+
+# Anaconda installer
+cat <<EOF > config/hooks/0100-anaconda.chroot
+#!/bin/bash
+set -e
+cd /tmp
+wget https://repo.anaconda.com/archive/Anaconda3-2024.02-1-Linux-x86_64.sh
+bash Anaconda3-2024.02-1-Linux-x86_64.sh -b -p /opt/anaconda
+echo 'export PATH=/opt/anaconda/bin:\$PATH' >> /etc/profile.d/anaconda.sh
+EOF
+chmod +x config/hooks/0100-anaconda.chroot
+
+# Autologin as d2iuser
+cat <<EOF > config/includes.chroot/etc/lightdm/lightdm.conf.d/60-autologin.conf
+[Seat:*]
+autologin-user=d2iuser
+autologin-user-timeout=0
+EOF
+
+# XFCE wallpaper placeholder (optional)
+cat <<EOF > config/includes.chroot/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitor0" type="empty">
+        <property name="image-path" type="string" value="/usr/share/backgrounds/d2i-wallpaper.png"/>
+      </property>
+    </property>
+  </property>
+</channel>
+EOF
+
+# Firefox homepage
+mkdir -p config/includes.chroot/etc/firefox/pref
+echo 'user_pref("browser.startup.homepage", "https://www.datatoinsight.org");' \
+  > config/includes.chroot/etc/firefox/pref/d2i-homepage.js
+
+# Start build
+echo "Starting build..."
+sudo lb build

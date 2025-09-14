@@ -1,0 +1,71 @@
+name: Create EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          - destroy
+
+      region:
+        description: 'Provide region'
+        required: true
+        default: 'us-east-1'
+
+      ami_id:
+        description: "Enter ami id"
+        required: true
+
+      instance_type:
+        description: 'Provide instance type'
+        required: true
+        default: "t2.micro"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout SCM
+      uses: actions/checkout@v4
+      with:
+        repository: iana-rodyakina/actions-terraform
+
+    - name: Download Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.12.2"
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4.1.0
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Create tfvars file
+      run: |
+        cat <<EOF > terraform.tfvars
+        ami_id = "${{ inputs.ami_id }}"
+        instance_type = "${{ inputs.instance_type }}"
+        region = "${{ inputs.region }}"
+        EOF
+
+    - name: Terraform Init
+      run: terraform init -backend-config="key=${{ inputs.region }}/terraform.tfstate"
+
+    - name: Terraform Plan
+      run: terraform plan
+
+    - name: Terraform Action
+      run:  |
+        if [[ "${{ inputs.action }}" == "apply" ]]; then 
+          terraform apply -auto-approve
+        else
+          terraform destroy -auto-approve
+        fi

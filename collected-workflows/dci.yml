@@ -1,0 +1,78 @@
+version: "3"
+services:
+  minio:
+    image: quay.io/minio/minio
+    env_file: .env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+  createbuckets:
+    image: quay.io/minio/mc
+    env_file: .env
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set dciminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      /usr/bin/mc mb dciminio/${STORE_COMPONENTS_CONTAINER};
+      /usr/bin/mc mb dciminio/${STORE_CONTAINER_BUCKET};
+      exit 0;
+      "
+  haproxy:
+    image: docker.io/haproxytech/haproxy-alpine:3.0
+    depends_on:
+      - api
+    volumes:
+      - ./haproxy:/usr/local/etc/haproxy:ro,Z
+    ports:
+      - "8000:80"
+      - "8404:8404"
+  db:
+    image: quay.io/sclorg/postgresql-16-c9s
+    environment:
+      - POSTGRESQL_USER=dci
+      - POSTGRESQL_PASSWORD=dci
+      - POSTGRESQL_DATABASE=dci
+    volumes:
+      - ./dci-db:/opt/app-root/src:Z
+    tmpfs:
+      - /var/lib/pgsql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: pg_isready -d dci -U dci -h db
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  api:
+    build: ${DCI_GIT_REPO_DIR}/dci-control-server
+    depends_on:
+      - db
+      - minio
+    env_file: .env
+    volumes:
+      - ${DCI_GIT_REPO_DIR}/dci-control-server:/opt/dci-control-server:z
+    restart: on-failure
+    deploy:
+      more: replicated
+      replicas: 4
+    healthcheck:
+      test: curl -sf http://api:5000/api/v1
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    command: /usr/local/bin/gunicorn -c /etc/gunicorn.conf.py --reload -b 0.0.0.0:5000 dci.app:create_app()
+    entrypoint: /usr/local/sbin/entrypoint-devenv.sh
+  tox:
+    build: ./dci-tox
+    env_file: .env
+    privileged: true
+    stdin_open: true
+    tty: true
+    depends_on:
+      - api
+    volumes:
+      - ${DCI_GIT_REPO_DIR}/python-dciclient:/opt/python-dciclient:z
+      - ${DCI_GIT_REPO_DIR}/dci-control-server:/opt/dci-control-server:z
+      - ${DCI_GIT_REPO_DIR}/dci-ansible:/opt/dci-ansible:z

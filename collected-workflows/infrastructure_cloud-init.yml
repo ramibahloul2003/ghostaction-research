@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Update system packages
+apt-get update
+apt-get upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+systemctl enable docker
+systemctl start docker
+
+# Install Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Create app user
+useradd -m -s /bin/bash ${project_name}
+usermod -aG docker ${project_name}
+
+# Create application directory
+mkdir -p /opt/${project_name}
+chown ${project_name}:${project_name} /opt/${project_name}
+
+# Install fail2ban for basic security
+apt-get install -y fail2ban
+
+# Configure automatic updates
+apt-get install -y unattended-upgrades
+echo 'Unattended-Upgrade::Automatic-Reboot "false";' >> /etc/apt/apt.conf.d/50unattended-upgrades
+
+# Create swap file (helps with $6/month droplet)
+fallocate -l 1G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
+
+# Signal that cloud-init is complete
+touch /var/log/cloud-init-complete

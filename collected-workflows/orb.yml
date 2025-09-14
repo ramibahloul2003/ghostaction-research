@@ -1,0 +1,115 @@
+version: 2.1
+description: Terraform Orb
+
+# Orb Dependencies
+#orbs:
+#  gcloud: circleci/gcp-cli@1.0.6
+
+executors:
+  default:
+    docker:
+      - image: hashicorp/terraform:light
+
+commands:
+  create-keyfile:
+    description: "Persists Google credentials as a file"
+    steps:
+      - run: |
+          echo "$<<parameters.var>>" > <<parameters.file>>
+    parameters:
+      file:
+        description: "File full path to persist the credentials"
+        type: string
+        default: ./secrets/service-account.json
+      var:
+        description: "Environment variable to retrieve the credentials from"
+        type: env_var_name
+        default: GOOGLE_CREDENTIALS
+  install:
+    description: "Installs terraform cli"
+    steps:
+      - run: |
+          wget "https://releases.hashicorp.com/terraform/<<parameters.version>>/terraform_<<parameters.version>>_linux_amd64.zip" && \
+          unzip terraform_*_linux_amd64.zip && \
+          sudo mv terraform /usr/local/bin/
+          rm terraform_*_linux_amd64.zip
+    parameters:
+      version:
+        description: "Version of terraform cli to be installed"
+        type: string
+        default: "0.12.24"
+  multi-project-terraform:
+    description: "Applies terraform command to multiple projects"
+    steps:
+      - run:
+          name: "multi project terraform <<parameters.command>>"
+          command: |
+            _pwd=$(pwd)
+            (
+              for project_path in <<parameters.path>>/*
+              do
+                echo "###############################################"
+                echo "###### project: $project_path"
+                echo "###############################################"
+                echo ""
+                cd "${_pwd}/${project_path}" || exit
+                terraform <<parameters.command>> || exit
+              done
+            )
+    parameters:
+      command:
+        description: "Terraform command to be executed on all projects"
+        type: string
+      path:
+        description: "path to the projects folder"
+        type: string
+        default: projects
+
+jobs:
+  validate:
+    description: "Execute terraform validate"
+    executor: default
+    steps:
+      - checkout
+      - create-keyfile
+      - run:
+          name: Print Terraform version
+          command: |
+            terraform --version
+      - multi-project-terraform:
+          command: init
+      - multi-project-terraform:
+          command: validate
+
+  check:
+    description: "Execute terraform plan and fail if state changed"
+    executor: default
+    parameters:
+      cluster:
+        description: "The Kubernetes cluster name."
+        type: string
+    steps:
+      - checkout
+      - create-keyfile
+      - run:
+          name: Print Terraform version
+          command: |
+            terraform --version
+      - multi-project-terraform:
+          command: init
+      - multi-project-terraform:
+          command: plan -detailed-exitcode
+
+example:
+  plan-apply:
+    description: |
+      "The simplest example of using this Orb. Checks out the code
+      performs a terraform validate and plan."
+    usage:
+      version: 2.1
+      orbs:
+        tf: titel-media/terraform@dev:testing-3
+      workflows:
+        main:
+          jobs:
+            - tf/validate

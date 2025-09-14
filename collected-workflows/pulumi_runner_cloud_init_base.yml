@@ -1,0 +1,33 @@
+#!/bin/sh
+
+export runner_token="RUNNER_TOKEN"
+
+echo "Runner token $runner_token"
+
+# Install Docker first
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+sudo add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
+   $(lsb_release -cs) stable"
+sudo apt update
+sudo apt install -y docker.io python3-pip python3-venv
+
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Now install CircleCI runner
+curl -s https://packagecloud.io/install/repositories/circleci/runner/script.deb.sh?any=true | sudo bash
+sudo apt install -y circleci-runner
+
+# Give the circleci user docker access
+sudo usermod -aG docker circleci
+
+# Inject your runner token
+sudo sed -i "s/RUNNER_TOKEN/$runner_token/g" /etc/circleci-runner/circleci-runner-config.yaml
+
+# Enable & start the runner service
+sudo systemctl enable circleci-runner
+sudo systemctl start  circleci-runner
+
+# Dump its status to the logs (non-blocking)
+sudo systemctl status circleci-runner --no-pager || true
