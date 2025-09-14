@@ -14,7 +14,7 @@ Analyser et reproduire de façon contrôlée la campagne **GhostAction** (vol de
 - '.github/workflows/' : workflows simulés ('ci_simulated1..7.yml') utilisés pour la simulation.
 - 'analysis/' : sorties d'analyse (ex : 'capture_vs_static_match.csv').
 - 'reports/' : rapport d'expérience, observations et recommandations.
-- '.env' : variables locales (ex : 'TEST_SECRET', 'GITHUB_TOKEN' si utilisé) 
+- '.env' : variables locales ( 'GITHUB_TOKEN') 
 - 'index.csv et workflow_summary.csv' : résumé tabulaire des workflows trouvés sur GitHub.
 - 'README.md' : ce fichier.
 
